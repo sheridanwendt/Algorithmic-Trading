@@ -175,7 +175,7 @@ function Update-Experts {
                 }
             }
             catch {
-                Log "Failed to update expert $($expert.Name) at instance $i: $($_.Exception.Message)"
+                Log "Failed to update expert $($expert.Name) at instance $i $($_.Exception.Message)"
             }
         }
     }
