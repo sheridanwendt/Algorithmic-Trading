@@ -1,0 +1,54 @@
+{
+  "installer": {
+    "sha256": "your_installer_core_sha256_hash_here"
+  },
+  "prereqs": {
+    "vc": {
+      "url": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+      "sha256": "a1b2c3d4e5f6..."
+    },
+    "dotnet": {
+      "url": "https://download.visualstudio.microsoft.com/download/pr/.../windowsdesktop-runtime-8.0.8-win-x64.exe",
+      "sha256": "f6e5d4c3b2a1..."
+    }
+  },
+  "apps": {
+    "mt5": {
+      "url": "https://example.com/mt5_installer.exe",
+      "sha256": "hash_for_mt5_installer"
+    },
+    "ox": {
+      "url": "https://example.com/ox_installer.exe",
+      "sha256": "hash_for_ox_installer"
+    },
+    "orbtl": {
+      "url": "https://example.com/orbtl_installer.exe",
+      "sha256": "hash_for_orbtl_installer"
+    }
+  },
+  "configs": {
+    "challenge1": {
+      "sha256": "hash_for_challenge1_zip"
+    },
+    "challenge2": {
+      "sha256": "hash_for_challenge2_zip"
+    },
+    "challenge3": {
+      "sha256": "hash_for_challenge3_zip"
+    }
+  },
+  "experts": {
+    "Titan X": {
+      "version": "23.63",
+      "sha256": "hash_for_titan_x"
+    },
+    "Titan Hedge": {
+      "version": "2.09",
+      "sha256": "hash_for_titan_hedge"
+    },
+    "Orbtl Example": {
+      "version": "1.2",
+      "sha256": "hash_for_orbtl_example"
+    }
+  }
+}
