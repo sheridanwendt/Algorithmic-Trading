@@ -6,11 +6,12 @@
     Sheridan Wendt
 
 .DESCRIPTION
-    Downloads and installs MT5, Ox Securities MT5, Orbtl, Experts and configs for each Challenge instance.
+    Downloads and installs MT5, Ox Securities MT5, Experts for each Challenge instance.
     Supports multiple Challenge installs, with cloning for MT5/Ox to avoid overwrites.
     Runs silent installs for first instances; clones for subsequent instances.
-    Updates Experts in all users' MetaQuotes folders.
+    Updates Experts in all users' MetaQuotes folders and in installed instances.
     Launches each MT5 and Ox instance on separate virtual desktops with delays.
+    Opens Explorer to Program Files during install for user visibility.
 
 .NOTES
     Requires running as Administrator.
@@ -128,8 +129,7 @@ function Install-OxInstance {
 }
 
 function Update-Experts {
-    # Download and update the latest Experts to all users' MetaQuotes Terminal folders
-
+    # Download experts once to temp folder
     $experts = @(
         @{ Name = "Titan X 23.63.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/Titan%20X%2023.63.ex5" },
         @{ Name = "Titan Hedge 2.09.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/Titan%20Hedge%202.09.ex5" },
@@ -148,7 +148,39 @@ function Update-Experts {
         }
     }
 
-    # Find all user MetaQuotes Terminal folders
+    # Update experts in all installed MT5/Ox instances
+    $baseMT5Path = "C:\Program Files\MetaTrader 5"
+    $baseOxPath = "C:\Program Files\Ox Securities MetaTrader 5"
+
+    for ($i = 1; $i -le $TotalChallenges; $i++) {
+        $mt5ExpertDir = Join-Path (if ($i -eq 1) { $baseMT5Path } else { "$baseMT5Path $i" }) "MQL5\Experts"
+        $oxExpertDir = Join-Path (if ($i -eq 1) { $baseOxPath } else { "$baseOxPath $i" }) "MQL5\Experts"
+
+        foreach ($expert in $experts) {
+            try {
+                $sourceFile = Join-Path $tempDir $expert.Name
+                if (Test-Path $sourceFile) {
+                    if (Test-Path $mt5ExpertDir) {
+                        Copy-Item -Path $sourceFile -Destination $mt5ExpertDir -Force
+                        Log "Updated expert $($expert.Name) at $mt5ExpertDir"
+                    } else {
+                        Log "MT5 expert directory not found: $mt5ExpertDir"
+                    }
+                    if (Test-Path $oxExpertDir) {
+                        Copy-Item -Path $sourceFile -Destination $oxExpertDir -Force
+                        Log "Updated expert $($expert.Name) at $oxExpertDir"
+                    } else {
+                        Log "Ox expert directory not found: $oxExpertDir"
+                    }
+                }
+            }
+            catch {
+                Log "Failed to update expert $($expert.Name) at instance $i: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    # Update experts in all users' MetaQuotes Terminal folders (legacy behavior)
     $terminalRoot = "C:\Users"
     $allTerminals = Get-ChildItem -Path $terminalRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $metaQuotes = Join-Path $_.FullName "AppData\Roaming\MetaQuotes\Terminal"
@@ -168,8 +200,7 @@ function Update-Experts {
         foreach ($expert in $experts) {
             try {
                 $sourceFile = Join-Path $tempDir $expert.Name
-                $destFile = Join-Path $expertDir $expert.Name
-                Copy-Item -Path $sourceFile -Destination $destFile -Force
+                Copy-Item -Path $sourceFile -Destination $expertDir -Force
                 Log "Updated expert $($expert.Name) at $expertDir"
             }
             catch {
@@ -256,15 +287,20 @@ function Main {
     try {
         if ($TotalChallenges -eq 0) {
             $TotalChallenges = Read-Host "Enter total number of Challenges you want running on this VPS (e.g. 3)"
-            [int]::TryParse($TotalChallenges, [ref]$null) | Out-Null
-            if ($TotalChallenges -lt 1 -or $TotalChallenges -gt 5) {
-                throw "Please enter a number between 1 and 5."
+            if (-not [int]::TryParse($TotalChallenges, [ref]$null)) {
+                throw "Invalid number entered."
+            }
+            if ($TotalChallenges -lt 1 -or $TotalChallenges -gt 10) {
+                throw "Please enter a number between 1 and 10."
             }
         }
 
+        Log "Opening File Explorer to C:\Program Files so you can see installs appear..."
+        Start-Process explorer.exe "C:\Program Files"
+
         Log "Starting installation for $TotalChallenges Challenges..."
 
-        # Paths for installers (assume these downloaded or downloaded now)
+        # Paths for installers
         $downloadDir = Join-Path $env:TEMP "AlgorithmicTradingInstallers"
         if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir | Out-Null }
 
@@ -275,37 +311,61 @@ function Main {
         $mt5InstallerUrl = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/installers/mt5setup.exe"
         $oxInstallerUrl = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/installers/oxsecurities5setup.exe"
 
-        # Download and validate MT5 installer
-        if (-not (Test-Path $mt5InstallerPath) -or (Get-Item $mt5InstallerPath).Length -lt 1MB) {
-            Log "Downloading MT5 installer..."
-            if (-not (Download-File -Url $mt5InstallerUrl -DestinationPath $mt5InstallerPath)) {
-                throw "Failed to download MT5 installer."
-            }
-            if ((Get-Item $mt5InstallerPath).Length -lt 1MB) {
-                throw "MT5 installer file size suspiciously small after download."
-            }
-            Log "MT5 installer downloaded and validated."
+        # Always redownload to get latest installers
+        Log "Downloading MT5 installer..."
+        if (-not (Download-File -Url $mt5InstallerUrl -DestinationPath $mt5InstallerPath)) {
+            throw "Failed to download MT5 installer."
         }
+        if ((Get-Item $mt5InstallerPath).Length -lt 1MB) {
+            throw "MT5 installer file size suspiciously small after download."
+        }
+        Log "✅Successful Download of MT5 installer."
 
-        # Download and validate Ox installer
-        if (-not (Test-Path $oxInstallerPath) -or (Get-Item $oxInstallerPath).Length -lt 1MB) {
-            Log "Downloading Ox installer..."
-            if (-not (Download-File -Url $oxInstallerUrl -DestinationPath $oxInstallerPath)) {
-                throw "Failed to download Ox installer."
-            }
-            if ((Get-Item $oxInstallerPath).Length -lt 1MB) {
-                throw "Ox installer file size suspiciously small after download."
-            }
-            Log "Ox installer downloaded and validated."
+        Log "Downloading Ox installer..."
+        if (-not (Download-File -Url $oxInstallerUrl -DestinationPath $oxInstallerPath)) {
+            throw "Failed to download Ox installer."
         }
+        if ((Get-Item $oxInstallerPath).Length -lt 1MB) {
+            throw "Ox installer file size suspiciously small after download."
+        }
+        Log "✅Successful Download of Ox installer."
+
+        # Detect installed instances (folder-based)
+        $baseMT5Path = "C:\Program Files\MetaTrader 5"
+        $baseOxPath = "C:\Program Files\Ox Securities MetaTrader 5"
+
+        $existingMT5Instances = @()
+        $existingOxInstances = @()
 
         for ($i = 1; $i -le $TotalChallenges; $i++) {
-            Log "Processing Challenge $i..."
+            $mt5Path = if ($i -eq 1) { $baseMT5Path } else { "$baseMT5Path $i" }
+            $oxPath = if ($i -eq 1) { $baseOxPath } else { "$baseOxPath $i" }
 
-            Install-MT5Instance -ChallengeNum $i -InstallerPath $mt5InstallerPath
-            Install-OxInstance -ChallengeNum $i -InstallerPath $oxInstallerPath
+            if (Test-Path $mt5Path) { $existingMT5Instances += $i }
+            if (Test-Path $oxPath) { $existingOxInstances += $i }
+        }
 
-            # Orbtl and config downloads skipped as requested
+        Log "Existing MT5 instances found: $($existingMT5Instances -join ', ')"
+        Log "Existing Ox instances found: $($existingOxInstances -join ', ')"
+
+        # Install missing MT5 instances
+        for ($i = 1; $i -le $TotalChallenges; $i++) {
+            if ($existingMT5Instances -notcontains $i) {
+                Install-MT5Instance -ChallengeNum $i -InstallerPath $mt5InstallerPath
+            }
+            else {
+                Log "MT5 instance $i already installed, skipping install."
+            }
+        }
+
+        # Install missing Ox instances
+        for ($i = 1; $i -le $TotalChallenges; $i++) {
+            if ($existingOxInstances -notcontains $i) {
+                Install-OxInstance -ChallengeNum $i -InstallerPath $oxInstallerPath
+            }
+            else {
+                Log "Ox instance $i already installed, skipping install."
+            }
         }
 
         Update-Experts
