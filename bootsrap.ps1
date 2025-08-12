@@ -1,6 +1,8 @@
 param (
     [Parameter(Mandatory=$true)]
-    [string[]]$Challenges
+    [string[]]$Challenges,
+
+    [switch]$DebugMode
 )
 
 $repoBase = "https://raw.githubusercontent.com/sheridanwendt/Algorithmic-Trading/main"
@@ -27,4 +29,9 @@ if ($coreHashRemote -ne $coreHashLocal) {
     }
 }
 
-& powershell -ExecutionPolicy Bypass -File $tempCore -Challenges $Challenges
+$arguments = @("-Challenges", $Challenges)
+if ($DebugMode) {
+    $arguments += "-DebugMode"
+}
+
+& powershell -ExecutionPolicy Bypass -File $tempCore @arguments
