@@ -1,193 +1,298 @@
-param (
-    [Parameter(Mandatory=$true)]
-    [string[]]$Challenges,
+<#
+.SYNOPSIS
+    Installer script for Algorithmic Trading Challenges on VPS
 
+.AUTHOR
+    Sheridan Wendt
+
+.DESCRIPTION
+    Downloads and installs MT5, Ox Securities MT5, Orbtl, Experts and configs for each Challenge instance.
+    Supports multiple Challenge installs, with cloning for MT5/Ox to avoid overwrites.
+    Runs silent installs for first instances; clones for subsequent instances.
+    Updates Experts in all users' MetaQuotes folders.
+    (Config ZIP download removed as requested.)
+    After installs, launches each MT5 and Ox instance on separate virtual desktops, waiting 30 seconds between each launch.
+
+.NOTES
+    Requires running as Administrator.
+#>
+
+param(
+    [int]$TotalChallenges = 0,
     [switch]$DebugMode
 )
 
-$logFile = "$env:TEMP\challenge_install.log"
-
-function Log-Write {
-    param ([string]$msg)
-    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    $entry = "[$timestamp] $msg"
-    Add-Content -Path $logFile -Value $entry
-    if ($DebugMode) { Write-Host $entry }
+function Log {
+    param([string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$timestamp] $Message"
 }
 
-# Wrapper to run commands with error capture
-function Run-WithLogging([scriptblock]$scriptblock, [string]$context) {
-    try {
-        & $scriptblock
-        Log-Write "SUCCESS: $context"
-    } catch {
-        Log-Write "ERROR: $context - $_"
-        throw $_
-    }
-}
+function Download-File {
+    param(
+        [string]$Url,
+        [string]$DestinationPath,
+        [int]$MaxRetries = 3
+    )
 
-# Trap for unexpected errors
-trap {
-    Log-Write "FATAL ERROR: $_"
-    Write-Host "An error occurred. Please check the log file at $logFile" -ForegroundColor Red
-    # Prevent console from closing automatically
-    if ($Host.Name -eq 'ConsoleHost') { Read-Host "Press Enter to exit..." }
-    exit 1
-}
-
-Log-Write "Starting install process..."
-
-# Require admin check
-Run-WithLogging {
-    if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
-        [Security.Principal.WindowsBuiltinRole] "Administrator")) {
-        throw "Script must be run as Administrator."
-    }
-} "Admin rights verification"
-
-# --- DOWNLOAD WITH RETRY & CHECKSUM ---
-function Download-File($url, $destination, $expectedHash) {
-    $maxRetries = 3
-    $retryDelay = 2
-    for ($i = 1; $i -le $maxRetries; $i++) {
+    for ($i = 1; $i -le $MaxRetries; $i++) {
         try {
-            Log-Write "Downloading $url to $destination (Attempt $i)"
-            Invoke-WebRequest -Uri $url -OutFile $destination -UseBasicParsing -ErrorAction Stop
-            if ((Get-FileHash -Algorithm SHA256 $destination).Hash.ToLower() -eq $expectedHash.ToLower()) {
-                Log-Write "Checksum verified for $destination"
-                return $true
-            } else {
-                Log-Write "Checksum mismatch for $destination"
-                Remove-Item $destination -ErrorAction SilentlyContinue
+            Log "Attempt $i Downloading $Url ..."
+            Invoke-WebRequest -Uri $Url -OutFile $DestinationPath -UseBasicParsing -ErrorAction Stop
+            Log "Downloaded $Url to $DestinationPath"
+            return $true
+        }
+        catch {
+            Log "Download failed on attempt $i ${_}"
+            Start-Sleep -Seconds 2
+        }
+    }
+    Log "FATAL ERROR: Failed to download $Url after $MaxRetries attempts."
+    return $false
+}
+
+function Install-MT5Instance {
+    param (
+        [int]$ChallengeNum,
+        [string]$BaseMT5Path = "C:\Program Files\MetaTrader 5",
+        [string]$InstallerPath
+    )
+
+    $targetPath = if ($ChallengeNum -eq 1) {
+        $BaseMT5Path
+    } else {
+        "$BaseMT5Path $ChallengeNum"
+    }
+
+    if (Test-Path $targetPath) {
+        Log "MT5 instance $ChallengeNum already installed at $targetPath"
+        return
+    }
+
+    if ($ChallengeNum -eq 1) {
+        Log "Installing MT5 instance $ChallengeNum via installer to $targetPath..."
+        Start-Process -FilePath $InstallerPath -ArgumentList "/S" -Wait -NoNewWindow
+        if (-not (Test-Path $targetPath)) {
+            Log "ERROR: MT5 installation directory not found after install. Expected $targetPath"
+            throw "MT5 install failed"
+        }
+    } else {
+        $prevPath = if ($ChallengeNum -eq 2) { $BaseMT5Path } else { "$BaseMT5Path $(($ChallengeNum - 1))" }
+        if (-not (Test-Path $prevPath)) {
+            Log "Previous MT5 install folder $prevPath does not exist. Cannot clone."
+            throw "Missing MT5 source folder for cloning"
+        }
+        Log "Cloning MT5 instance $ChallengeNum from $prevPath to $targetPath..."
+        Copy-Item -Path $prevPath -Destination $targetPath -Recurse -Force
+    }
+}
+
+function Install-OxInstance {
+    param (
+        [int]$ChallengeNum,
+        [string]$BaseOxPath = "C:\Program Files\Ox Securities MetaTrader 5",
+        [string]$InstallerPath
+    )
+
+    $targetPath = if ($ChallengeNum -eq 1) {
+        $BaseOxPath
+    } else {
+        "$BaseOxPath $ChallengeNum"
+    }
+
+    if (Test-Path $targetPath) {
+        Log "Ox instance $ChallengeNum already installed at $targetPath"
+        return
+    }
+
+    if ($ChallengeNum -eq 1) {
+        Log "Installing Ox instance $ChallengeNum via installer to $targetPath..."
+        Start-Process -FilePath $InstallerPath -ArgumentList "/S" -Wait -NoNewWindow
+        if (-not (Test-Path $targetPath)) {
+            Log "ERROR: Ox installation directory not found after install. Expected $targetPath"
+            throw "Ox install failed"
+        }
+    } else {
+        $prevPath = if ($ChallengeNum -eq 2) { $BaseOxPath } else { "$BaseOxPath $(($ChallengeNum - 1))" }
+        if (-not (Test-Path $prevPath)) {
+            Log "Previous Ox install folder $prevPath does not exist. Cannot clone."
+            throw "Missing Ox source folder for cloning"
+        }
+        Log "Cloning Ox instance $ChallengeNum from $prevPath to $targetPath..."
+        Copy-Item -Path $prevPath -Destination $targetPath -Recurse -Force
+    }
+}
+
+function Update-Experts {
+    # Download and update the latest Experts to all users' MetaQuotes Terminal folders
+
+    $experts = @(
+        @{ Name = "Titan X 23.63.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/Titan%20X%2023.63.ex5" },
+        @{ Name = "Titan Hedge 2.09.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/Titan%20Hedge%202.09.ex5" },
+        @{ Name = "OrbtlBridge 1.2.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/OrbtlBridge%201.2.ex5" }
+    )
+
+    $tempDir = Join-Path $env:TEMP "AlgorithmicTradingExperts"
+    if (-Not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir | Out-Null }
+
+    foreach ($expert in $experts) {
+        $destFile = Join-Path $tempDir $expert.Name
+        Log "Downloading expert $($expert.Name)..."
+        if (-not (Download-File -Url $expert.Url -DestinationPath $destFile)) {
+            Log "ERROR: Failed to download expert $($expert.Name). Skipping."
+            continue
+        }
+    }
+
+    # Find all user MetaQuotes Terminal folders
+    $terminalRoot = "C:\Users"
+    $allTerminals = Get-ChildItem -Path $terminalRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $metaQuotes = Join-Path $_.FullName "AppData\Roaming\MetaQuotes\Terminal"
+        if (Test-Path $metaQuotes) {
+            Get-ChildItem -Path $metaQuotes -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $_.FullName
             }
-        } catch {
-            Log-Write "Download error: $_"
         }
-        Start-Sleep -Seconds ( $retryDelay * $i )
-    }
-    throw "Failed to download $url after $maxRetries attempts."
-}
+    } | Where-Object { $_ -ne $null }
 
-# --- PREREQUISITE CHECK ---
-function Ensure-Prerequisite($name, $checkCommand, $downloadUrl, $expectedHash, $installerArgs) {
-    Run-WithLogging {
-        if (-not (& $checkCommand)) {
-            Log-Write "Installing prerequisite: $name..."
-            $tempFile = "$env:TEMP\$name.exe"
-            if (Download-File $downloadUrl $tempFile $expectedHash) {
-                Start-Process -FilePath $tempFile -ArgumentList $installerArgs -Wait -NoNewWindow
-            } else {
-                throw "Failed to install prerequisite: $name"
+    foreach ($terminal in $allTerminals) {
+        $expertDir = Join-Path $terminal "MQL5\Experts"
+        if (-not (Test-Path $expertDir)) {
+            Log "Expert directory not found at $expertDir. Skipping."
+            continue
+        }
+        foreach ($expert in $experts) {
+            try {
+                $sourceFile = Join-Path $tempDir $expert.Name
+                $destFile = Join-Path $expertDir $expert.Name
+                Copy-Item -Path $sourceFile -Destination $destFile -Force
+                Log "Updated expert $($expert.Name) at $expertDir"
             }
-        } else {
-            Log-Write "$name already installed."
-        }
-    } "Prerequisite check/install: $name"
-}
-
-# --- FETCH VERSIONS ---
-try {
-    $versionsFile = "https://raw.githubusercontent.com/sheridanwendt/Algorithmic-Trading/main/versions.json"
-    $versions = Invoke-RestMethod -Uri $versionsFile -UseBasicParsing
-    Log-Write "Fetched versions.json"
-} catch {
-    Log-Write "Cannot fetch versions.json from repo: $_"
-    throw $_
-}
-
-# Check and install prerequisites
-Ensure-Prerequisite "VC++_x64" {
-    Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64 -ErrorAction SilentlyContinue
-} $versions.prereqs.vc.url $versions.prereqs.vc.sha256 "/install /quiet /norestart"
-
-Ensure-Prerequisite ".NET_Desktop_Runtime" {
-    Get-Command "dotnet" -ErrorAction SilentlyContinue
-} $versions.prereqs.dotnet.url $versions.prereqs.dotnet.sha256 "/install /quiet /norestart"
-
-# --- UPDATE EXPERTS ---
-function Update-Experts($experts) {
-    $expertFolders = Get-ChildItem "C:\Users\*\AppData\Roaming\MetaQuotes\Terminal\*\MQL5\Experts" -Directory -ErrorAction SilentlyContinue
-    foreach ($folder in $expertFolders) {
-        foreach ($expertName in $experts.Keys) {
-            $ver = $experts[$expertName].version
-            $hash = $experts[$expertName].sha256
-            $fileName = "$expertName $ver.ex5"
-            $sourceUrl = "https://raw.githubusercontent.com/sheridanwendt/Algorithmic-Trading/main/experts/$fileName"
-            $destFile = Join-Path $folder.FullName $fileName
-
-            if (-not (Test-Path $destFile) -or (Get-FileHash -Algorithm SHA256 $destFile).Hash.ToLower() -ne $hash.ToLower()) {
-                Log-Write "Updating Expert: $fileName in $($folder.FullName)"
-                Download-File $sourceUrl $destFile $hash | Out-Null
+            catch {
+                Log "Failed to update expert $($expert.Name) at $expertDir ${_}"
             }
         }
     }
 }
 
-# --- INSTALL CHALLENGE ---
-function Install-Challenge($num) {
-    Log-Write "`n--- Installing Challenge $num ---"
+function Launch-Instances-On-VirtualDesktops {
+    param (
+        [int]$TotalChallenges,
+        [string]$BaseMT5Path = "C:\Program Files\MetaTrader 5",
+        [string]$BaseOxPath = "C:\Program Files\Ox Securities MetaTrader 5"
+    )
 
-    $mt5Path = "C:\Program Files\MetaTrader 5" + $(if ($num -gt 1) { " $num" } else { "" })
-    $oxPath = "C:\Program Files\Ox Securities MetaTrader 5" + $(if ($num -gt 1) { " $num" } else { "" })
-    $orbtlPath = "C:\Program Files\Orbtl"
+    # Install and import VirtualDesktop module if needed
+    if (-not (Get-Module -ListAvailable -Name VirtualDesktop)) {
+        Log "Installing VirtualDesktop module..."
+        Install-Module VirtualDesktop -Force -Scope CurrentUser
+    }
+    Import-Module VirtualDesktop
 
-    $apps = $versions.apps
-
-    # MT5
-    $mt5Exe = Join-Path $mt5Path "terminal64.exe"
-    if (-not (Test-Path $mt5Exe) -or (Get-FileHash -Algorithm SHA256 $mt5Exe).Hash.ToLower() -ne $apps.mt5.sha256.ToLower()) {
-        if (Download-File $apps.mt5.url "$env:TEMP\mt5_$num.exe" $apps.mt5.sha256) {
-            Start-Process "$env:TEMP\mt5_$num.exe" "/S /D=$mt5Path" -Wait
+    for ($i = 1; $i -le $TotalChallenges; $i++) {
+        # Create or get new virtual desktop
+        $desktopName = "Challenge$i"
+        $desktop = Get-Desktop | Where-Object { $_.Name -eq $desktopName }
+        if (-not $desktop) {
+            $desktop = New-Desktop -Name $desktopName
+            Log "Created virtual desktop: $desktopName"
         } else {
-            throw "Failed to install MT5 for Challenge $num"
+            Log "Virtual desktop already exists: $desktopName"
         }
-    } else {
-        Log-Write "MT5 already installed and verified for Challenge $num"
+
+        # Switch to that desktop
+        Switch-Desktop -Desktop $desktop
+        Log "Switched to virtual desktop: $desktopName"
+
+        # Compose MT5 path for this instance
+        $mt5Path = if ($i -eq 1) { $BaseMT5Path } else { "$BaseMT5Path $i" }
+        $mt5Exe = Join-Path $mt5Path "terminal.exe"
+
+        # Compose Ox path for this instance
+        $oxPath = if ($i -eq 1) { $BaseOxPath } else { "$BaseOxPath $i" }
+        $oxExe = Join-Path $oxPath "terminal.exe"
+
+        # Start MT5 and Ox instances with /portable flag
+        if (Test-Path $mt5Exe) {
+            Start-Process -FilePath $mt5Exe -ArgumentList "/portable"
+            Log "Started MT5 instance $i at $mt5Exe"
+        } else {
+            Log "MT5 executable not found for instance $i at $mt5Exe"
+        }
+
+        if (Test-Path $oxExe) {
+            Start-Process -FilePath $oxExe -ArgumentList "/portable"
+            Log "Started Ox instance $i at $oxExe"
+        } else {
+            Log "Ox executable not found for instance $i at $oxExe"
+        }
+
+        Log "Waiting 30 seconds for instance $i to initialize..."
+        Start-Sleep -Seconds 30
     }
 
-    # Ox
-    $oxExe = Join-Path $oxPath "terminal64.exe"
-    if (-not (Test-Path $oxExe) -or (Get-FileHash -Algorithm SHA256 $oxExe).Hash.ToLower() -ne $apps.ox.sha256.ToLower()) {
-        if (Download-File $apps.ox.url "$env:TEMP\ox_$num.exe" $apps.ox.sha256) {
-            Start-Process "$env:TEMP\ox_$num.exe" "/S /D=$oxPath" -Wait
-        } else {
-            throw "Failed to install Ox for Challenge $num"
-        }
-    } else {
-        Log-Write "Ox already installed and verified for Challenge $num"
-    }
+    Log "All instances launched on separate virtual desktops."
+}
 
-    # Orbtl
-    $orbtlExe = Join-Path $orbtlPath "orbtl.exe"
-    if (-not (Test-Path $orbtlExe) -or (Get-FileHash -Algorithm SHA256 $orbtlExe).Hash.ToLower() -ne $apps.orbtl.sha256.ToLower()) {
-        if (Download-File $apps.orbtl.url "$env:TEMP\orbtl.exe" $apps.orbtl.sha256) {
-            Start-Process "$env:TEMP\orbtl.exe" "/S /D=$orbtlPath" -Wait
-        } else {
-            throw "Failed to install Orbtl"
+function Main {
+    try {
+        if ($TotalChallenges -eq 0) {
+            $TotalChallenges = Read-Host "Enter total number of Challenges you want running on this VPS (e.g. 3)"
+            [int]::TryParse($TotalChallenges, [ref]$null) | Out-Null
+            if ($TotalChallenges -lt 1 -or $TotalChallenges -gt 5) {
+                throw "Please enter a number between 1 and 5."
+            }
         }
-    } else {
-        Log-Write "Orbtl already installed and verified"
-    }
 
-    # Configs
-    $configZip = "$env:TEMP\challenge${num}_config.zip"
-    if (Download-File "$repoBase/configs/challenge${num}.zip" $configZip $versions.configs["challenge$num"].sha256) {
-        Expand-Archive -Path $configZip -DestinationPath $mt5Path -Force
-        Log-Write "Extracted config for Challenge $num"
-    } else {
-        throw "Failed to download config for Challenge $num"
+        Log "Starting installation for $TotalChallenges Challenges..."
+
+        # Paths for installers (assume these downloaded or downloaded now)
+        $downloadDir = Join-Path $env:TEMP "AlgorithmicTradingInstallers"
+        if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir | Out-Null }
+
+        $mt5InstallerPath = Join-Path $downloadDir "mt5setup.exe"
+        $oxInstallerPath = Join-Path $downloadDir "oxsecurities5setup.exe"
+
+        # URLs for installers (GitHub raw URLs)
+        $mt5InstallerUrl = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/installers/mt5setup.exe"
+        $oxInstallerUrl = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/installers/oxsecurities5setup.exe"
+
+        # Download installers if not exist
+        if (-not (Test-Path $mt5InstallerPath)) {
+            if (-not (Download-File -Url $mt5InstallerUrl -DestinationPath $mt5InstallerPath)) {
+                throw "Failed to download MT5 installer."
+            }
+        }
+        if (-not (Test-Path $oxInstallerPath)) {
+            if (-not (Download-File -Url $oxInstallerUrl -DestinationPath $oxInstallerPath)) {
+                throw "Failed to download Ox installer."
+            }
+        }
+
+        for ($i = 1; $i -le $TotalChallenges; $i++) {
+            Log "Processing Challenge $i..."
+
+            Install-MT5Instance -ChallengeNum $i -InstallerPath $mt5InstallerPath
+            Install-OxInstance -ChallengeNum $i -InstallerPath $oxInstallerPath
+
+            # Orbtl install logic if needed (currently none)
+        }
+
+        Update-Experts
+
+        Launch-Instances-On-VirtualDesktops -TotalChallenges $TotalChallenges
+
+        Log "Installation and launch complete."
+
+    }
+    catch {
+        Log "An error occurred: ${_}"
     }
 }
 
-# --- MAIN ---
-foreach ($challenge in $Challenges) {
-    Install-Challenge $challenge
+# Run Main
+Main
+
+if ($DebugMode) {
+    Read-Host "Press Enter to exit..."
 }
-
-Update-Experts $versions.experts
-
-Log-Write "`nAll Challenges installed/updated successfully!"
-Write-Host "`nInstallation complete! Log file at: $logFile" -ForegroundColor Green
-
-# Keep console open after completion if run interactively
-if ($Host.Name -eq 'ConsoleHost') { Read-Host "Press Enter to exit..." }
