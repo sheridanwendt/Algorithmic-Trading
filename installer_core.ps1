@@ -10,7 +10,7 @@
     Supports multiple Challenge installs, with cloning for MT5/Ox to avoid overwrites.
     Runs silent installs for first instances; clones for subsequent instances.
     Updates Experts in all users' MetaQuotes folders (both instance folders and roaming profiles).
-    Launches each MT5 and Ox instance on separate virtual desktops with delays.
+    Launches each MT5 and Ox instance sequentially on the same desktop with delays.
 
 .NOTES
     Requires running as Administrator.
@@ -128,8 +128,6 @@ function Install-OxInstance {
 }
 
 function Update-Experts {
-    # Download and update the latest Experts to all users' MetaQuotes Terminal folders
-
     $experts = @(
         @{ Name = "Titan X 23.63.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/Titan%20X%2023.63.ex5" },
         @{ Name = "Titan Hedge 2.09.ex5"; Url = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/experts/Titan%20Hedge%202.09.ex5" },
@@ -148,7 +146,7 @@ function Update-Experts {
         }
     }
 
-    # Find all user MetaQuotes Terminal folders under users' roaming profiles
+    # Get all user MetaQuotes Terminal folders under roaming profiles
     $terminalRoot = "C:\Users"
     $allTerminals = Get-ChildItem -Path $terminalRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $metaQuotes = Join-Path $_.FullName "AppData\Roaming\MetaQuotes\Terminal"
@@ -159,19 +157,11 @@ function Update-Experts {
         }
     } | Where-Object { $_ -ne $null }
 
-    # Additionally find Experts folders inside each installed MT5 and Ox instance (for current machine)
-    $installedMT5Base = "C:\Program Files\MetaTrader 5"
-    $installedOxBase = "C:\Program Files\Ox Securities MetaTrader 5"
-    $instanceDirs = @()
-    # Add MT5 instances
-    $dirs = Get-ChildItem -Path "C:\Program Files" -Directory -ErrorAction SilentlyContinue | Where-Object { 
+    # Also find Experts folders inside each installed MT5 and Ox instance (for current machine)
+    $instanceDirs = Get-ChildItem -Path "C:\Program Files" -Directory -ErrorAction SilentlyContinue | Where-Object { 
         $_.Name -like "MetaTrader 5*" -or $_.Name -like "Ox Securities MetaTrader 5*"
-    }
-    foreach ($dir in $dirs) {
-        $instanceDirs += $dir.FullName
-    }
+    } | Select-Object -ExpandProperty FullName
 
-    # Combine all folders to update Experts
     $allExpertFolders = @()
 
     foreach ($terminal in $allTerminals) {
@@ -188,7 +178,6 @@ function Update-Experts {
         }
     }
 
-    # Remove duplicates
     $allExpertFolders = $allExpertFolders | Select-Object -Unique
 
     foreach ($expertDir in $allExpertFolders) {
@@ -206,34 +195,13 @@ function Update-Experts {
     }
 }
 
-function Launch-Instances-On-VirtualDesktops {
+function Launch-Instances {
     param (
         [int]$TotalChallenges,
         [string]$BaseMT5Path = "C:\Program Files\MetaTrader 5",
         [string]$BaseOxPath = "C:\Program Files\Ox Securities MetaTrader 5"
     )
 
-    # Install and import VirtualDesktop module
-    if (-not (Get-Module -ListAvailable -Name VirtualDesktop)) {
-        Log "Installing VirtualDesktop module..."
-        Install-Module VirtualDesktop -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-    }
-    Import-Module VirtualDesktop
-
-    # Create desktops if necessary
-    $existingDesktops = Get-Desktop
-    for ($i = 1; $i -le $TotalChallenges; $i++) {
-        $desktopName = "Challenge$i"
-        if (-not ($existingDesktops.Name -contains $desktopName)) {
-            Log "Creating virtual desktop $desktopName"
-            New-Desktop -Name $desktopName | Out-Null
-        }
-    }
-
-    # Get updated list of desktops after creation
-    $desktops = Get-Desktop
-
-    # Helper functions to get executable path for MT5 and Ox instance
     function Get-MT5ExePath($instanceNum) {
         $path = if ($instanceNum -eq 1) { $BaseMT5Path } else { "$BaseMT5Path $instanceNum" }
         return Join-Path $path "terminal64.exe"
@@ -244,35 +212,37 @@ function Launch-Instances-On-VirtualDesktops {
         return Join-Path $path "terminal64.exe"
     }
 
-    for ($i = 1; $i -le $TotalChallenges; $i++) {
-        $desktop = $desktops | Where-Object { $_.Name -eq "Challenge$i" }
-        if (-not $desktop) {
-            Log "ERROR: Virtual desktop Challenge$i not found."
-            continue
-        }
-        Log "Switching to virtual desktop Challenge$i"
-        Switch-Desktop -Desktop $desktop
+    Log "Launching first MT5 and Ox instances..."
 
-        $mt5Exe = Get-MT5ExePath $i
-        $oxExe = Get-OxExePath $i
+    # Launch first MT5 and Ox instance, wait 30s
+    if (Test-Path (Get-MT5ExePath 1)) {
+        Start-Process -FilePath (Get-MT5ExePath 1) -ArgumentList "/portable"
+        Log "Started MT5 instance 1"
+    }
+    else { Log "MT5 instance 1 executable not found." }
 
-        if (Test-Path $mt5Exe) {
-            Log "Starting MT5 instance $i from $mt5Exe"
-            Start-Process -FilePath $mt5Exe -ArgumentList "/portable"
-        }
-        else {
-            Log "MT5 executable not found for instance $i at $mt5Exe"
-        }
+    if (Test-Path (Get-OxExePath 1)) {
+        Start-Process -FilePath (Get-OxExePath 1) -ArgumentList "/portable"
+        Log "Started Ox instance 1"
+    }
+    else { Log "Ox instance 1 executable not found." }
 
-        if (Test-Path $oxExe) {
-            Log "Starting Ox instance $i from $oxExe"
-            Start-Process -FilePath $oxExe -ArgumentList "/portable"
-        }
-        else {
-            Log "Ox executable not found for instance $i at $oxExe"
-        }
+    Start-Sleep -Seconds 30
 
-        Log "Waiting 30 seconds for instance $i to start..."
+    # Launch remaining instances one by one with 30s delay each
+    for ($i = 2; $i -le $TotalChallenges; $i++) {
+        if (Test-Path (Get-MT5ExePath $i)) {
+            Start-Process -FilePath (Get-MT5ExePath $i) -ArgumentList "/portable"
+            Log "Started MT5 instance $i"
+        }
+        else { Log "MT5 instance $i executable not found." }
+
+        if (Test-Path (Get-OxExePath $i)) {
+            Start-Process -FilePath (Get-OxExePath $i) -ArgumentList "/portable"
+            Log "Started Ox instance $i"
+        }
+        else { Log "Ox instance $i executable not found." }
+
         Start-Sleep -Seconds 30
     }
 }
@@ -293,18 +263,16 @@ function Main {
 
         Log "Starting installation for $TotalChallenges Challenges..."
 
-        # Paths for installers (assume these downloaded or downloaded now)
         $downloadDir = Join-Path $env:TEMP "AlgorithmicTradingInstallers"
         if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir | Out-Null }
 
         $mt5InstallerPath = Join-Path $downloadDir "mt5setup.exe"
         $oxInstallerPath = Join-Path $downloadDir "oxsecurities5setup.exe"
 
-        # URLs for installers (GitHub raw URLs)
         $mt5InstallerUrl = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/installers/mt5setup.exe"
         $oxInstallerUrl = "https://github.com/sheridanwendt/Algorithmic-Trading/raw/refs/heads/main/installers/oxsecurities5setup.exe"
 
-        # Always redownload installers to get latest version
+        # Always redownload installers for latest
         Log "Downloading MT5 installer..."
         if (-not (Download-File -Url $mt5InstallerUrl -DestinationPath $mt5InstallerPath)) {
             throw "Failed to download MT5 installer."
@@ -323,33 +291,21 @@ function Main {
         }
         Log "✅ Successful Download of Ox installer."
 
-        # Open File Explorer to Program Files so user can see installs
         Log "Opening File Explorer to C:\Program Files"
         Start-Process "explorer.exe" -ArgumentList "C:\Program Files"
 
         for ($i = 1; $i -le $TotalChallenges; $i++) {
             Log "Processing Challenge $i..."
-
             Install-MT5Instance -ChallengeNum $i -InstallerPath $mt5InstallerPath
             Install-OxInstance -ChallengeNum $i -InstallerPath $oxInstallerPath
-
             # Orbtl and config downloads skipped as requested
         }
 
-        Log "Launching all MT5 and Ox instances on separate virtual desktops..."
-
-        Launch-Instances-On-VirtualDesktops -TotalChallenges $TotalChallenges
-
-        Log "All instances started successfully."
-
-        Log "Updating Experts in all user profiles and instances..."
+        Launch-Instances -TotalChallenges $TotalChallenges
 
         Update-Experts
 
-        Log "Experts updated successfully."
-
         Log "Installation and setup complete."
-
     }
     catch {
         Log "An error occurred: $($_.Exception.Message)"
