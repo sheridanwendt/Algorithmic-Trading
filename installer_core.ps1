@@ -47,7 +47,7 @@ function Download-File {
             return $true
         }
         catch {
-            Log "Download failed on attempt $i: $($_.Exception.Message)"
+            Log "Download failed on attempt $i $($_.Exception.Message)"
             Start-Sleep -Seconds 2
         }
     }
@@ -173,7 +173,7 @@ function Update-Experts {
                 Log "Updated expert $($expert.Name) at $expertDir"
             }
             catch {
-                Log "Failed to update expert $($expert.Name) at $expertDir: $($_.Exception.Message)"
+                Log "Failed to update expert $($expert.Name) at $expertDir $($_.Exception.Message)"
             }
         }
     }
